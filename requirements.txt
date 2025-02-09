@@ -1,0 +1,9 @@
+gspread
+oauth2client
+pydantic
+pandas
+fastapi
+tensorflo
+scikit-learn
+requests
+unicornv
