@@ -17,7 +17,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for testing purposes (change to specific origins for security)
+    allow_origins=["*"],  
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -32,6 +32,8 @@ client = gspread.authorize(creds)
 SHEET_ID = "1g7uVhRn1czV_kSbaXmjwr-88sxjahTDigl9htQ0xoBw"
 sheet = client.open_by_key(SHEET_ID).sheet1 
 PREDICT_ID = '13_f_4pEUgCifgGYRzME0eFNRVrt_vGMKEcygE-MrFJ8'
+STOCK_ID = '1-B04126To0UBwG7d-tEmIL2P97DrtnsfvgsMtElFcKk'
+# https://docs.google.com/spreadsheets/d/1-B04126To0UBwG7d-tEmIL2P97DrtnsfvgsMtElFcKk/edit?usp=sharing
  
 
 # Define the data model for SalesData
@@ -75,15 +77,73 @@ async def get_all_sales():
 
     return {"data": sales_data}
 
+@app.get("/get-all-stocks/")
+async def get_all_stocks():
+    stock = client.open_by_key(STOCK_ID).sheet1 
+    data = stock.get_all_values()
+
+    stocks_data = []
+    headers = data[0] 
+    for row in data[1:]:
+        stocks_data.append({
+            headers[i]: row[i] for i in range(len(headers))
+        })
+
+    return {"data": stocks_data}
+
+@app.get("/get-all-prediction/{drug_code}")
+async def get_all_prediction(drug_code: str):
+    predict_sheet = client.open_by_key(PREDICT_ID)
+    product_sheet = predict_sheet.worksheet(drug_code)
+
+    data = product_sheet.get_all_values()
+    predict_data = []
+    headers = data[0] 
+    for row in data[1:]:
+        predict_data.append({
+            headers[i]: row[i] for i in range(len(headers))
+        })
+    return {"data": predict_data}
+
+@app.get("/get-stock/{drug_code}/")
+async def get_stock(drug_code: str):
+    stock = client.open_by_key(STOCK_ID).sheet1 
+    data = stock.get_all_values()
+
+    headers = data[0]
+    drug_code_index = headers.index('drug_code')
+    amount_index = headers.index('amount')
+    price_index = headers.index('price')
+
+    for row in data[1:]:
+        if row[drug_code_index] == drug_code:
+            return {
+                'drug_code': row[drug_code_index],
+                'amount': row[amount_index],
+                'price': row[price_index]
+            }
+
+    return {"error": "Drug code not found"}
+
+
 @app.get("/get-all-medicines/")
 async def get_all_medicines():
     all_rows = sheet.get_all_records()
+    count = 0
+    unique_medicines = {}
+    for row in all_rows:
+        drug_code = row["drug_code"]
+        product_name = row["product_name"]
 
-    unique_medicines = { (row['product_name'], row['drug_code']) for row in all_rows }
+        if drug_code not in unique_medicines:
+            unique_medicines[drug_code] = product_name
+            count = count + 1  
 
-    medicines_list = [{"product_name": name, "drug_code": code} for name, code in unique_medicines]
-
-    return {"medicines": medicines_list}
+    medicines_list = sorted(
+        [{"drug_code": code, "product_name": name} for code, name in unique_medicines.items()],
+        key=lambda x: x["drug_code"]
+    )
+    return {"medicines": medicines_list,"count": count}
 
 @app.get("/get-medicine-by-id/{drug_code}")
 async def get_medicine_by_id(drug_code: str):
@@ -96,6 +156,40 @@ async def get_medicine_by_id(drug_code: str):
     raise HTTPException(status_code=404, detail="Medicine not found")
 
 
+
+@app.get("/get-predictions-stock")
+async def get_predictions():
+    predict_sheet = client.open_by_key(PREDICT_ID)
+    product_ids = [
+        "A0158", "A0160", "A0167", "A0175", "B0071", "B0086", "C0142", "C0173", "C0185", "C0196",
+        "D0104", "D0160", "D0167", "D0174", "D0179", "D0189", "E0055", "F0083", "F0096", "G0066", "G0074", 
+        "G0090", "G0091", "G0095", "H0038", "I0108", "O0045", "S0125"
+    ]
+    
+    sum_predictions3 = {}
+    sum_predictions7 = {}
+    manual_predictions = {}
+    
+    for product_id in product_ids:
+        try:
+            product_sheet = predict_sheet.worksheet(product_id)
+            data = product_sheet.get_all_values()
+            df = pd.DataFrame(data[1:], columns=data[0])  
+            df['predicted_quantity'] = pd.to_numeric(df['predicted_quantity'], errors='coerce')
+
+            sum_predictions3[product_id] = int(df.iloc[:3]['predicted_quantity'].sum()) if df.iloc[:3]['predicted_quantity'].any() else 0 
+            sum_predictions7[product_id] = int(df.iloc[:7]['predicted_quantity'].sum()) if df.iloc[:7]['predicted_quantity'].any() else 0
+            manual_predictions[product_id] = df.iloc[:7]['predicted_quantity'].tolist() if df.iloc[:7]['predicted_quantity'].any() else [0] * days
+        except gspread.exceptions.WorksheetNotFound:
+            sum_predictions3[product_id] = 0
+            sum_predictions7[product_id] = 0
+            manual_predictions[product_id] = [0] * 7
+    
+    return {"predictions_sum_3days": sum_predictions3, "predictions_sum_7days": sum_predictions7 ,"predictions": manual_predictions}
+
+
+
+    
 @app.get("/get-monthly-predictions/{year_month}/{product_ID}")
 async def get_monthly_predictions(year_month: str, product_ID: str):
     
